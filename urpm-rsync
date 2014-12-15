@@ -1,0 +1,272 @@
+#! /bin/bash
+
+
+warn() {
+	echo >&2 "$@"
+}
+
+die() {
+	warn "$@"
+	exit 1
+}
+
+usage() {
+	warn "$(basename $0) [-v] [-n] [--auto] [--tmpdir=<dir>] [--rsync-exclude=<pattern>] [--rsync-filter-from=<file>...] --list=<file> <SRC> <DST>"
+	warn
+	warn "  $(basename $0) is a tool to import or update a set of given packages"
+	warn "  and all their dependencies as well. Therefore it can be usefull to create"
+	warn "  or maintain a repository of a distribution containing only a subset of"
+	warn "  packages."
+	warn
+	warn "  <SRC>: an url that specifies the root location of the set of medias"
+	warn "  <DST>: the directory where to put the imported distribution medias tree"
+	warn
+	warn "  Example:"
+	warn
+	warn "    $(basename $0) --rsync-filter-from=excluded.lst --list=packages.lst fbui@abed.mbs:/home/repos/mbs1/x86_64 /tmp/mbs1/"
+	warn "    $(basename $0) --rsync-filter-from=excluded.lst --list=packages.lst rsync://mirrorsync@mirror.mandriva.com/factory/x86_64"
+	warn
+	warn "  Sample of 'excluded.lst':"
+	warn
+	warn "  - /*/doc/"
+	warn "  - /*/misc/"
+	warn "  - /*/dosutils/"
+	warn "  - /*/install/"
+	warn "  - /*/isolinux/"
+	warn "  - /*/media/debug/"
+	warn "  - /*/media/mbs1_updates/"
+	warn "  - /*/media/*/testing/"
+	warn "  - /*/media/tainted/"
+	warn "  - /*/media/perso/"
+	warn "  - /*/media/stylite/"
+	warn
+	exit 1
+}
+
+auto_deps=false
+tmpdir=
+package_list=
+dry_run=
+exclude_patterns=()
+filter_from=
+verbose=
+
+while
+
+	case $1 in
+	--auto)			auto_deps=true ;;
+	--list=*)		package_list=${1#--list=} ;;
+	--tmpdir=*)		tmpdir=${1#--tmpdir=} ;;
+	--rsync-exclude=*)	exclude_patterns+=(--exclude=${1#*=}) ;;
+	--rsync-filter-from=*)	filter_from=${1#*=} ;;
+	-n)			dry_run=-n ;;
+	-v)			verbose=-v ;;
+	-*)			usage ;;
+	*)			break
+	esac
+do
+	shift
+done
+
+if test $# -ne 2; then
+	usage
+fi
+
+distrib=$1
+destination=$2
+
+if ! test -d $destination; then
+	die "Invalid destination directory"
+fi
+
+if test -z "$package_list"; then
+	die "You must provide a file containing the list of the (root) packages to import."
+fi
+
+if test -n "$filter_from"; then
+	filter_from=$(readlink -e $filter_from) ||
+	die "Filter file not found."
+fi
+
+case $distrib in
+rsync://*)	;;
+*://*)		die 'Invalid protocol.' ;;
+esac
+
+case $distrib in
+*/)
+	warn '<SRC> has a trailing slash which is not allowed otherwise'
+	warn 'the root directory of your set of media would be skipped'
+	warn 'according to the rsync(1) pattern.'
+	warn
+	warn 'Please remove it and update your filter patterns (if any)'
+	warn 'accordingly.'
+	exit 1
+esac
+
+#
+# Read the list of the (root) packages to import.
+#
+declare -a packages
+
+if ! test -r "$package_list"; then
+	die "Failed to read file '$package_list'"
+fi
+
+while read pkg; do
+	case $pkg in
+	\#*)	continue ;;
+	esac
+	packages+=($pkg)
+done <"$package_list"
+
+if test ${#packages[*]} -eq 0; then
+	die "The list of packages you provided is empty."
+fi
+
+#
+# Temporary directory.
+#
+cleanup_on_exit() {
+	$clean_tmpdir && rm -fr $tmpdir
+}
+trap cleanup_on_exit EXIT
+
+clean_tmpdir=false
+if test -z "$tmpdir"; then
+	tmpdir=$(mktemp -d)
+	clean_tmpdir=true
+fi
+
+if ! test -d "$tmpdir"; then
+	die "Invalid temporary directory provided."
+fi
+
+#
+# Generate the list of the packages including all dependencies.
+#
+# Caveat: urpm* uses it own syntax for specifying an url with ssh
+# protocol (otherwise life would be too simple):
+#
+#    ssh://fbui@abed.mbs/home/repos/mbs1/x86_64
+#
+# whereas the traditionnal way to specify that would be:
+#
+#    fbui@abed.mbs:/home/repos/mbs1/x86_64
+#
+# ssh:// prefix must be given and the ':' before the remote path is
+# dropped, meaning that path is always absolute...
+#
+# Also when specifying a rsync protocole, the form using the '::' is
+# not supported so convert the url to use the 'rsync://' form.
+#
+case $distrib in
+rsync://*)	stupid_urpm_url=$distrib ;;
+*::*)		stupid_urpm_url=rsync://${distrib/::/\/} ;;
+*:/*)		stupid_urpm_url=ssh://${distrib/:\//\/} ;;
+*)		die "You must use an absolute path for specifying distribution URL."
+esac
+
+# urpmq print some debug outputs on stderr if ssh protocol is used...
+echo "Processing dependencies..."
+urpmq --use-distrib $stupid_urpm_url --requires-recursive "${packages[@]}" >$tmpdir/deps.lst 2>$tmpdir/urpmq-stderr.log
+
+# urpmq is boggus: it returns 0 even when failing so add a sanity
+# check.
+if test $? -ne 0 || ! test -s $tmpdir/deps.lst; then
+	warn "Failed to retrieve dependencies for given packages."
+	warn "Here's the log of urpmq that might help you to resolve the issue:"
+	warn
+	cat >&2 $tmpdir/urpmq-stderr.log
+	exit 1
+fi
+
+cat $tmpdir/deps.lst | sort | uniq >$tmpdir/deps-sorted.lst
+
+#
+# Make sure there's no multiple choices for a given dep.
+#
+if $auto_deps; then
+	# Pick up the first choice.
+	sed -ri 's/([^|])*.*/\1/' $tmpdir/deps-sorted.lst
+
+elif grep -q -F '|' $tmpdir/deps-sorted.lst; then
+	warn "Multiple choices are available for one provide."
+	warn "Please, add your choice(s) in the package list to import or use"
+	warn "the --auto option to select the first candidate automatically."
+	warn
+	grep -F '|' $tmpdir/deps-sorted.lst
+	exit 1
+fi
+
+#
+# Generate rsync filter rules and use them to sync the repo.
+#
+for p in $(< $tmpdir/deps-sorted.lst); do
+	echo "+ $p-[[:digit:]]*.rpm"
+done >$tmpdir/rsync-packages-filter
+
+cat >$tmpdir/rsync-filter-packages<<EOF
+${filter_from:+. $filter_from}
+. $tmpdir/rsync-packages-filter
+- *.rpm
+- media_info/*
+EOF
+
+transfer_root=/${distrib##*/}
+
+cat >$tmpdir/rsync-filter-configs<<EOF
++ /*/
++ /*/media/
++ /*/media/media_info/
++ /*/media/media_info/*
+- *
+EOF
+
+echo "Importing distro..."
+rsync -a $verbose $dry_run				\
+	"${exclude_patterns[@]}"			\
+	--filter=". $tmpdir/rsync-filter-packages"	\
+	${distrib#ssh://} $destination &&
+
+# don't overwrite config files that could have been updated on the
+# receiving side.
+rsync -a $verbose $dry_run --update			\
+	"${exclude_patterns[@]}"			\
+	--filter=". $tmpdir/rsync-filter-configs"	\
+	${distrib#ssh://} $destination ||
+exit
+
+test -n "$dry_run" &&
+exit
+
+#
+# Finally update the hdlists.
+#
+echo "Updating hdlists..."
+cd $destination/${distrib##*/}
+
+# Skip the global media_info directory.
+find -path './media/?*/media_info' -type d -prune | while read d
+do
+	#
+	# Not sure what 'file-deps' is exactly used for but it's how
+	# the BS calls it, see:
+	#
+	# /usr/share/mga-youri-submit/lib/Youri/Submit/Post/Genhdlist2.pm
+	#
+	genhdlist2 --quiet $verbose \
+	    --file-deps=media/media_info/file-deps \
+	    --allow-empty-media \
+	    $(dirname $d) || exit
+done
+
+#
+# Regenerate the global MD5SUM, since the previous command made it
+# incomplete. Again this recipe is coming from:
+#
+# /usr/share/mga-youri-submit/lib/Youri/Submit/Post/Genhdlist2.pm
+#
+# Some symlinks may be dangling so ignore any errors.
+#
+(cd media/media_info; md5sum hdlist_* synthesis.* >MD5SUM 2>/dev/null) || :

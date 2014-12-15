@@ -53,3 +53,20 @@ librairies (if they exist and are usable) for example, but that was
 the fastest path for me.
 
 So use it at your own risk ;)
+
+* urpm-rsync
+
+** Descritption
+
+This tool is used for downloading a subset of a repositories managed
+by urpmi(1).
+
+It preserves the repository layout, and make the repositories
+consistent by downloading any dependencies of wanted packages.
+
+Since the tool relies on rsync(1), the only protocols supported to
+access the repositories are: ssh and rsync.
+
+** Usage
+
+urpm-rsync --list=packages.lst rsync://mirrorsync@mirror.mandriva.com/factory/x86_64

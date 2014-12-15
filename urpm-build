@@ -1,0 +1,293 @@
+#!/bin/bash
+
+remote_shell="ssh -p24 fbui@mes5devel.mandriva.com"
+remote_repo=/mnt/BIG/devel/cooker/SRPMS/
+
+remote_get () {
+	scp -q -P24 fbui@mes5devel.mandriva.com:"$1" "$2"
+}
+
+declare -i level=0
+
+warn () {
+	echo >&2 "$@"
+}
+
+die () {
+	echo >&2 "$@"
+	exit 1
+}
+
+msg () {
+	echo >&2 "[$level] $@"
+}
+
+#
+# This tries to deal with the crapish names that "urpmq --requires" can
+# return,  for example: perl(Mongo)
+#
+declare -a ref_medias=("ref main" "ref contrib")
+__ref_medias_checked=no
+
+check_reference_medias () {
+	if test $__ref_medias_checked != yes; then
+		for m in "${ref_medias[@]}"; do
+			# I haven't found something better to check
+			# the presence of a specific media.
+			urpmi.update "$m" &>/dev/null &&
+			continue
+
+			warn "ref media '$m' doesn't seem to be installed."
+			warn "To install it, you can use:"
+			warn
+			warn "   $ urpmi.addmedia \"$m\" <url>"
+			warn "   $ urpmi.update --ignore \"$m\""
+			warn
+			die  "to make sure that it's ignored by default."
+		done
+		__ref_medias_checked=yes
+	fi
+}
+
+reference_resolve_crapnamename () {
+	local name
+
+	check_reference_medias
+
+	for m in "${ref_medias[@]}" ""; do
+		msg "Resolving name '$1' using ${m:-default} media"
+		name=$(urpmq ${m:+--media} ${m:+"$m"} --whatprovides "$1" 2>/dev/null) && {
+			#
+			# urpmq can return 'perl-Test-Simple|perl', returns
+			# the first package if it is the case.
+			#
+			echo ${name%%|*}
+			return
+		}
+	done
+	die "Can't resolve '$1'"
+}
+
+reference_find_requires () {
+	for m in "${ref_medias[@]}"; do
+		if urpmq --requires --media "$m" "$1" 2>/dev/null; then
+			return
+		fi
+	done
+}
+
+local_find_requires () {
+	rpm -qp --requires "$1" | while read name crap
+	do
+		echo $name
+	done
+}
+
+__remote_find_source_package () {
+	local tmpfile=$(mktemp)
+	local -A hashtable
+	local -a candidates
+
+	$remote_shell "find $remote_repo -name $1\* -exec rpm -qp --qf '{} %{name}\n' {} \;" >$tmpfile
+	while read file name; do
+		hashtable[$name]=$file
+		case $name in
+		${1}*)	candidates+=($file)
+		esac
+	done <$tmpfile
+	rm -f $tmpfile
+
+	if test -n "${hashtable[$1]}"; then
+		echo ${hashtable[$1]}
+		return
+	fi
+	if test ${#candidates[*]} -eq 0; then
+		# nothing can match approximatively
+		return 1
+	fi
+	msg "Nothing match exactly '$1', but several possible candidates might:"
+	for i in ${!candidates[*]}; do
+		msg "  [$i] ${candidates[i]}"
+        done
+	msg "-------------------------------------"
+	msg "Make your choice: "
+	read i
+	echo ${candidates[i]}
+}
+
+remote_find_source_package () {
+	local alternatives=$1
+
+	case $1 in
+	lib*-devel)
+		l=${1%-devel}
+		alternatives+=" $l ${l#lib}" ;;
+	esac
+
+	for p in $alternatives; do
+		__remote_find_source_package $p && return
+	done
+
+	msg "I can't find the src package for '$1', enter the path: "
+	read
+	echo $REPLY
+}
+
+fetch_source_package () {
+	local src=$(remote_find_source_package $1)
+	if test -z "$src"; then
+		die "Can't find the source package for '$1'"
+	fi
+	msg "Fetching $src"
+	remote_get $src . &&
+	basename $src
+}
+
+install_source_package () {
+	msg "Installing source package '$1'"
+	rpm -i --nosignature $1 2>/dev/null || {
+		# try to install any missing BRs, but watch out since urpmq's
+		# returned value is always 0 with the --auto option
+		urpmi --auto --no-verify-rpm $1 2>/dev/null
+		rpm -i --nosignature $1 2>/dev/null
+	}
+}
+
+build_source_package () {
+	local name=$(rpm -qp --qf '%{name}' $1)
+	local tmpfile=$(mktemp)
+
+	msg "Building $name (logs in $tmpfile)" &&
+	rpmbuild -ba rpmbuild/SPECS/$name.spec &>$tmpfile &&
+	for p in rpmbuild/RPMS/*/${name}-*.rpm; do
+		case $(basename $p) in
+		${name}-debug-*)	continue ;;
+		${name}-debuginfo-*)	continue ;;
+		esac
+		echo $p
+	done &&
+	rm -f $tmpfile ||
+	die "Build failed, the log is available at '$tmpfile'"
+}
+
+can_skip_require () {
+	case $1 in
+	libc.*|libc6*|libcrypto.*|rtld*|libssl.*|libz.*) ;&
+	libstdc++.*|libpthread.*|libgcc*) ;&
+	*Moose*|/bin/*|libcurl.*|libexpat.*|rpmlib*|bzip2*)
+		true ;;
+	*)
+		false ;;
+	esac
+}
+
+#
+#
+#
+final_step=yes
+
+while :
+do
+	case $1 in
+	--only-deps)	final_step=no ;;
+	--level=*)	level=${1#--level=} ;;
+	-*)		die "Unknown options $1" ;;
+	*)		break
+	esac
+	shift
+done
+
+if test -z "$1"; then
+	die "missing <package>|<file>"
+fi
+
+target=$1
+if test -f "$target"; then
+	case "$target" in
+	*.src.rpm)	target_type=source ;;
+	*)		target_type=binary ;;
+	esac
+	msg "Resolving requires for $target_type package '$target'"
+	mapfile -t requires < <(local_find_requires "$target")
+else
+	# maybe the passing package name has been obfuscated
+	# ie it looks like 'perl(Font::AFM)'
+	target=$(reference_resolve_crapnamename $target) || exit
+	msg "Resolving (remotely) requires for '$target'"
+	mapfile -t requires < <(reference_find_requires "$target")
+
+	if urpmq $target 2>/dev/null; then
+		target_type=binary
+	else
+		target_type=source
+		target=$(fetch_source_package $target)
+	fi
+fi
+
+
+for r in "${requires[@]}"
+do
+	# strip any version constraints (ie perl-base[*][>= 0:1.7.4])
+	r=${r%%\[*\]}
+
+	# See if we can skip this one now so we can save one name
+	# resolution.
+	if can_skip_require $r; then
+		msg "Skipping $r"
+		continue
+	fi
+
+	r=$(reference_resolve_crapnamename $r) || exit
+
+	if can_skip_require $r; then
+		msg "Skipping $r"
+		continue
+	fi
+
+	msg "Processing $r"
+	rpm -q $r &>/dev/null && continue
+
+	# make an exact match here.
+	#if test "$(urpmq $r 2>/dev/null)" != $r; then
+	if ! urpmq $r &>/dev/null; then
+		#
+		# The package doesn't exist yet, so we need to build
+		# it and any of its missing BRs too.
+		#
+		src=$(fetch_source_package $r) &&
+		install_source_package $src || {
+			# ok it failed so we probably have to build/install
+			# the BRs first.
+			$0 --level=$((level+1)) --only-deps $src &&
+			install_source_package $src
+		} &&
+		r=$(build_source_package $src) ||
+		exit
+	fi
+
+	# the package is already built
+	msg "Installing binary package '$(basename $r)'"
+	urpmi --quiet $r || {
+		#
+		# but a dep is missing, preventing the package
+		# to be installed. Build the dep now...
+		#
+		$0 --level=$((level+1)) $r &&
+		# and try again
+		urpmi --auto $r || exit
+	}
+done
+
+# None of the following actions can fail since all deps are available
+# now.
+if test "$final_step" = yes
+then
+	case $target_type in
+	binary)
+		urpmi $target ;;
+	source)
+		install_source_package $target &&
+		build_source_package $target ;;
+	esac ||
+	die "Fail to install the final target '$target' !"
+fi

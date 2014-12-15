@@ -1,0 +1,55 @@
+#+TITLE: A collection of tools for dealing with urpm repositories
+
+* urpm-build
+** Description
+
+This tool is used when you need to build a source package and possibly
+all its missing build requirements.
+
+This typically happens when bootstrapping a distribution to a new
+architecture or when a distribution has already been bootstrapped but
+there're still a lot of missing packages.
+
+Before building a given package, the tool checks that all build
+requirements are available and installed. If not then it looks for the
+source package that provides the missing dependence by using a
+"reference" repository (more below). Once the source package is found,
+it's fetched on a server (through ssh) at a specific place (configured
+by 'remote_repo' variable) and it's built by the tool in its turn.
+
+This process is executed until no build requirements are found. After
+that, packages that couldn't be built due to missing build
+requirements are processed.
+
+Reference medias are used to resolve build require names. Indeed those
+names are given by the outpout of:
+
+	: rpm --requires
+
+or
+
+	: urpm --requires
+
+and some of them are obfuscated enough that we can't simply use them
+to retrieve the associated source package name. "perl(Font::AFM)" is
+an example.
+
+** Usage
+
+You can use the script by passing it a source package file as
+argument.
+
+It's also possible to pass a symbolic name, such as "perl(Mongo)". The
+script will resolve the name by using reference medias and will fetch
+the corresponding source package for you.
+
+** Note
+
+The tool is more a hackish script than anything else. It's in an early
+stage therefore expect some instant minutes of hacking in your turn.
+
+This probably could be done differently, by using (perl) URPM
+librairies (if they exist and are usable) for example, but that was
+the fastest path for me.
+
+So use it at your own risk ;)

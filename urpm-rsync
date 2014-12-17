@@ -189,7 +189,7 @@ cat $tmpdir/deps.lst | sort | uniq >$tmpdir/deps-sorted.lst
 #
 if $auto_deps; then
 	# Pick up the first choice.
-	sed -ri 's/([^|])*.*/\1/' $tmpdir/deps-sorted.lst
+	sed -ri 's/([^|]*).*/\1/' $tmpdir/deps-sorted.lst
 
 elif grep -q -F '|' $tmpdir/deps-sorted.lst; then
 	warn "Multiple choices are available for one provide."

@@ -164,6 +164,7 @@ case $distrib in
 rsync://*)	stupid_urpm_url=$distrib ;;
 *::*)		stupid_urpm_url=rsync://${distrib/::/\/} ;;
 *:/*)		stupid_urpm_url=ssh://${distrib/:\//\/} ;;
+/*)		stupid_urpm_url=$distrib ;;
 *)		die "You must use an absolute path for specifying distribution URL."
 esac
 

@@ -1,5 +1,6 @@
 #! /bin/bash
 
+set -o pipefail
 
 warn() {
 	echo >&2 "$@"
@@ -234,7 +235,7 @@ _get_all_dependencies () {
 		warn "Here's the log of urpmq that might help you to resolve the issue:"
 		warn
 		cat >&2 $tmpdir/urpmq-stderr.log
-		exit 1
+		return 1
 	fi
 
 	cat $tmpdir/deps.lst | sort | uniq >$tmpdir/deps-sorted.lst
@@ -264,7 +265,8 @@ get_all_dependencies () {
 }
 
 echo "Processing dependencies..."
-get_all_dependencies "${packages[@]}" >$tmpdir/dependencies-sorted.lst
+get_all_dependencies "${packages[@]}" >$tmpdir/dependencies-sorted.lst ||
+exit
 
 #
 # Generate rsync filter rules and use them to sync the repo.

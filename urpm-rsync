@@ -292,7 +292,7 @@ cat >$tmpdir/rsync-filter-configs<<EOF
 - *
 EOF
 
-echo "Importing distro..."
+echo "Importing repository..."
 rsync -a $verbose $dry_run				\
 	"${exclude_patterns[@]}"			\
 	--filter=". $tmpdir/rsync-filter-packages"	\

@@ -243,8 +243,7 @@ _get_all_dependencies () {
 	sed -e '/.*|.*/d' $tmpdir/deps-sorted.lst
 
 	# Handle multiple candidates fulfilling one dep.
-	grep -q -F '|' $tmpdir/deps-sorted.lst ||
-		return
+	grep -q -F '|' $tmpdir/deps-sorted.lst || return 0
 
 	sed -n '/.*|.*/p' $tmpdir/deps-sorted.lst | \
 		while IFS='|' read -a candidates

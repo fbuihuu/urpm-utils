@@ -120,7 +120,13 @@ config_url = args.url + '/media/media_info/media.cfg'
 config_file = tempfile.NamedTemporaryFile()
 fetch_config()
 
-config = ConfigParser(defaults=config_defaults, interpolation=None)
+# 'interpolation' were added in version 3.2.
+kwargs = {'defaults' : config_defaults}
+major, minor = sys.version_info[:2]
+if major > 3 or major == 3 and minor > 2:
+    kwargs['interpolation'] = None
+
+config = ConfigParser(**kwargs)
 config.read(config_file.name)
 
 #

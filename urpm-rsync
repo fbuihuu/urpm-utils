@@ -12,7 +12,7 @@ die() {
 }
 
 usage() {
-	warn "$(basename $0) [-v] [-n] [--tmpdir=<dir>] [--rsync-exclude=<pattern>] [--rsync-filter-from=<file>...] --list=<file> <SRC> <DST>"
+	warn "$(basename $0) [-v] [-n] [--tmpdir=<dir>] [--media=<media>] [--include-media=<media>] [--exclude-media=<media>] [--rsync-exclude=<pattern>] [--rsync-filter-from=<file>...] --list=<file> <SRC> <DST>"
 	warn
 	warn "  $(basename $0) is a tool to import or update a set of given packages"
 	warn "  and all their dependencies as well. Therefore it can be usefull to create"
@@ -50,6 +50,9 @@ dry_run=
 exclude_patterns=()
 filter_from=
 verbose=
+media_default=()
+media_included=()
+media_excluded=()
 
 while
 
@@ -58,6 +61,9 @@ while
 	--tmpdir=*)		tmpdir=${1#--tmpdir=} ;;
 	--rsync-exclude=*)	exclude_patterns+=(--exclude=${1#*=}) ;;
 	--rsync-filter-from=*)	filter_from=${1#*=} ;;
+	--media=*)		media_all+=${1#*=} ;;
+	--include-media=*)	media_included+=${1#*=} ;;
+	--exclude-media=*)	media_excluded+=${1#*=} ;;
 	-n)			dry_run=-n ;;
 	-v)			verbose=-v ;;
 	-*)			usage ;;
@@ -189,6 +195,36 @@ rsync://*)	stupid_urpm_url=$distrib ;;
 esac
 
 #
+# Setup the list of medias to use.
+#
+if test ${#media_default[*]} -lt 1; then
+	urpm-repo --url=$stupid_urpm_url list >$tmpdir/medias.lst ||
+	exit
+
+	while read media; do
+		media_default+=("$media")
+	done <$tmpdir/medias.lst
+fi
+
+for included in "${media_included[@]}"; do
+	for media in "${media_default[@]}"; do
+		test "$included" = "$media" && continue 2
+	done
+	media_default+=("$included")
+done
+
+for excluded in "${media_excluded[@]}"; do
+	for i in ${!media_default[*]}; do
+		test "$excluded" = "${media_default[i]}" && unset media_default[$i]
+	done
+done
+
+media_opt="--media="
+for media in "${media_default[@]}"; do
+	media_opt+="$media,"
+done
+
+#
 # This gets the list of all dependencies of the specified
 # packages. 'root' packages are also included in the returned list.
 #
@@ -225,6 +261,7 @@ _get_all_dependencies () {
 	# urpmq(1) prints some debug outputs on stderr if ssh protocol
 	# is used...
 	urpmq --use-distrib $stupid_urpm_url \
+	      "$media_opt" \
 	      --requires-recursive "$@" \
 	      >$tmpdir/deps.lst 2>$tmpdir/urpmq-stderr.log
 
@@ -338,3 +375,16 @@ done
 # Some symlinks may be dangling so ignore any errors.
 #
 (cd media/media_info; md5sum hdlist_* synthesis.* >MD5SUM 2>/dev/null) || :
+
+#
+# Finally configure repository to enable medias that were previously
+# used.
+#
+for media in "${media_default[@]}"; do
+	noauto=$(urpm-repo --url=$(pwd) get "$media" noauto) || exit
+	case $noauto in
+	1)
+		echo "Enabling media '$media'"
+		urpm-repo --url=$(pwd) set "$media" noauto 0 || exit ;;
+	esac
+done

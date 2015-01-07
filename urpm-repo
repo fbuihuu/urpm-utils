@@ -1,0 +1,147 @@
+#!/usr/bin/python
+
+import sys
+import shutil
+import tempfile
+import argparse
+import subprocess
+
+try:
+    from configparser import ConfigParser, NoSectionError, NoOptionError # py3k
+except ImportError:
+    from ConfigParser import ConfigParser, NoSectionError, NoOptionError
+
+
+config = None
+config_url = None
+config_file = None
+config_defaults = {
+    'noauto': '0',
+}
+
+#
+# Fetch the repository's config file.
+#
+def fetch_config():
+    if config_url.startswith('rsync://'):
+        subprocess.call(['rsync', '-a', config_url, config_file.name])
+    elif config_url.startswith('/'):
+        shutil.copyfile(config_url, config_file.name)
+    else:
+        sys.exit('Unsupported protocol')
+
+def push_config():
+    if not config_url.startswith('/'):
+        sys.exit('Only local repository can be modified, aborting.')
+
+    shutil.copyfile(config_file.name, config_url)
+
+#
+# Helper to write back the repo config file. It currently
+# supports local repository only.
+#
+def write_config():
+    #
+    # Don't write the DEFAULT section: unfortunately config.write()
+    # doesn't allow to do that properly.
+    #
+    config._defaults = None
+    with open(config_file.name, 'w') as f:
+        config.write(f, space_around_delimiters=False)
+    config._defaults = config_defaults
+
+    push_config()
+
+#
+# sub-commands.
+#
+def do_list(args):
+    for section in config.sections():
+        if section == 'media_info':
+            continue
+        if args.ignored_only:
+            if config.get(section, 'noauto') == '0':
+                continue
+        elif not args.all:
+            if config.get(section, 'noauto') == '1':
+                continue
+        print(config.get(section, 'name'))
+
+def do_get(args):
+    try:
+        print(config.get(args.section, args.key))
+    except NoOptionError:
+        pass
+
+def do_set(args):
+    config.set(args.section, args.key, args.value)
+    write_config()
+
+def do_show(args):
+    for key, value in config.items(args.section):
+        print('%s=%s' % (key, value))
+
+#
+# Arguments and options parsing.
+#
+parser = argparse.ArgumentParser(description="Configure an urpm repository")
+parser.add_argument('--url', required=True,
+                    help='URL of the repository to use')
+
+subparsers  = parser.add_subparsers()
+parser_get  = subparsers.add_parser('get',  help='Query a media property')
+parser_set  = subparsers.add_parser('set',  help='Set a media property (local repo only)')
+parser_list = subparsers.add_parser('list', help='List repository medias')
+parser_show = subparsers.add_parser('show', help='Show config of a specific media')
+
+group = parser_list.add_mutually_exclusive_group()
+group.add_argument('--all', action="store_true", help='List all medias including ignored ones')
+group.add_argument('--ignored-only', action="store_true", help='List ignored medias only')
+parser_list.set_defaults(func=do_list)
+
+parser_get.add_argument('media', help='Name of the media')
+parser_get.add_argument('key',  help='Name of the key')
+parser_get.set_defaults(func=do_get)
+
+parser_set.add_argument('media', help='Name of the media')
+parser_set.add_argument('key',   help='Name of the key')
+parser_set.add_argument('value', help='New value of the key')
+parser_set.set_defaults(func=do_set)
+
+parser_show.add_argument('media', help='Name of the media')
+parser_show.set_defaults(func=do_show)
+
+args = parser.parse_args()
+
+#
+#
+#
+config_url = args.url + '/media/media_info/media.cfg'
+config_file = tempfile.NamedTemporaryFile()
+fetch_config()
+
+config = ConfigParser(defaults=config_defaults, interpolation=None)
+config.read(config_file.name)
+
+#
+# Unfortunately the section name used by the config file is the
+# relative path of the media inside the repository, not the name of
+# the media. However most of the commands deal with the name of the
+# media, therefore we add the 'section' attribute in order to ease the
+# section retrieval.
+#
+if hasattr(args, 'media'):
+    for section in config.sections():
+        try:
+            if config.get(section, 'name') == args.media:
+                args.section = section
+                break
+        except NoOptionError:
+            continue
+    else:
+        sys.exit("Unknown media '%s'" % args.media)
+
+#
+# Call the sub command handler.
+#
+args.func(args)

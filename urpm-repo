@@ -47,7 +47,7 @@ def write_config():
     #
     config._defaults = None
     with open(config_file.name, 'w') as f:
-        config.write(f, space_around_delimiters=False)
+        config.write(f)
     config._defaults = config_defaults
 
     push_config()

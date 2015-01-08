@@ -318,7 +318,19 @@ ${filter_from:+. $filter_from}
 - media_info/*
 EOF
 
-cat >$tmpdir/rsync-filter-configs<<EOF
+echo "Importing repository..."
+rsync -a $verbose $dry_run				\
+	"${exclude_patterns[@]}"			\
+	--filter=". $tmpdir/rsync-filter-packages"	\
+	${distrib#ssh://} $destination &&
+
+#
+# Import main media_info/ which includes media.cfg.
+#
+# Don't overwrite its content which could have been updated on the
+# receiving side, specially media.cfg.
+#
+cat >$tmpdir/rsync-filter-media-info<<EOF
 + /*/
 + /*/media/
 + /*/media/media_info/
@@ -326,17 +338,9 @@ cat >$tmpdir/rsync-filter-configs<<EOF
 - *
 EOF
 
-echo "Importing repository..."
-rsync -a $verbose $dry_run				\
-	"${exclude_patterns[@]}"			\
-	--filter=". $tmpdir/rsync-filter-packages"	\
-	${distrib#ssh://} $destination &&
-
-# don't overwrite config files that could have been updated on the
-# receiving side.
 rsync -a $verbose $dry_run --update			\
 	"${exclude_patterns[@]}"			\
-	--filter=". $tmpdir/rsync-filter-configs"	\
+	--filter=". $tmpdir/rsync-filter-media-info"	\
 	${distrib#ssh://} $destination ||
 exit
 

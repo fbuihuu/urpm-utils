@@ -318,8 +318,6 @@ ${filter_from:+. $filter_from}
 - media_info/*
 EOF
 
-transfer_root=/${distrib##*/}
-
 cat >$tmpdir/rsync-filter-configs<<EOF
 + /*/
 + /*/media/

@@ -68,6 +68,9 @@ def do_list(args):
         print(config.get(section, 'name'))
 
 def do_get(args):
+    if args.key == 'path':
+        print(args.section)
+        return
     try:
         print(config.get(args.section, args.key))
     except NoOptionError:
@@ -78,8 +81,10 @@ def do_set(args):
     write_config()
 
 def do_show(args):
+    if args.section != 'media_info':
+        print('path = %s' % args.section)
     for key, value in config.items(args.section):
-        print('%s=%s' % (key, value))
+        print('%s = %s' % (key, value))
 
 #
 # Arguments and options parsing.

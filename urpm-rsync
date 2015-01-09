@@ -24,22 +24,13 @@ usage() {
 	warn
 	warn "  Example:"
 	warn
-	warn "    $(basename $0) --rsync-filter-from=excluded.lst --list=packages.lst fbui@abed.mbs:/home/repos/mbs1/x86_64 /tmp/mbs1/"
-	warn "    $(basename $0) --rsync-filter-from=excluded.lst --list=packages.lst rsync://mirrorsync@mirror.mandriva.com/factory/x86_64 /tmp/factory"
+	warn "    $(basename $0) --rsync-filter-from=filter.txt --list=packages.lst fbui@abed.mbs:/home/repos/mbs1/x86_64 /tmp/mbs1/"
+	warn "    $(basename $0) --rsync-filter-from=filter.txt --list=packages.lst rsync://mirrorsync@mirror.mandriva.com/factory/x86_64 /tmp/factory"
 	warn
-	warn "  Sample of 'excluded.lst':"
+	warn "  Sample of 'filter.txt':"
 	warn
-	warn "  - /*/doc/"
+	warn "  + /*/VERSION"
 	warn "  - /*/misc/"
-	warn "  - /*/dosutils/"
-	warn "  - /*/install/"
-	warn "  - /*/isolinux/"
-	warn "  - /*/media/debug/"
-	warn "  - /*/media/mbs1_updates/"
-	warn "  - /*/media/*/testing/"
-	warn "  - /*/media/tainted/"
-	warn "  - /*/media/perso/"
-	warn "  - /*/media/stylite/"
 	warn
 	exit 1
 }
@@ -305,21 +296,25 @@ get_all_dependencies "${packages[@]}" >$tmpdir/dependencies-sorted.lst ||
 exit
 
 #
-# Generate rsync filter rules and use them to sync the repo.
+# Import the packages and their deps only. We do that by importing all
+# directories in the hierarchy to allow rsync to descend in
+# directories containing the packages. We use --prune-empty-dirs to
+# get ride of the uneeded directories after that.
 #
 for p in $(< $tmpdir/dependencies-sorted.lst); do
 	echo "+ $p-[[:digit:]]*.rpm"
 done >$tmpdir/rsync-filter-rpm
 
 cat >$tmpdir/rsync-filter-packages<<EOF
++ */
 ${filter_from:+. $filter_from}
 . $tmpdir/rsync-filter-rpm
-- *.rpm
-- media_info/*
+- *
 EOF
 
 echo "Importing repository..."
 rsync -a $verbose $dry_run				\
+	--prune-empty-dirs				\
 	"${exclude_patterns[@]}"			\
 	--filter=". $tmpdir/rsync-filter-packages"	\
 	${distrib#ssh://} $destination &&
@@ -348,14 +343,22 @@ test -n "$dry_run" &&
 exit
 
 #
-# Finally update the hdlists.
+# Generate hdlists and enable medias previously used.
 #
 echo "Updating hdlists..."
 cd $destination/${distrib##*/}
 
-# Skip the global media_info directory.
-find -path './media/?*/media_info' -type d -prune | while read d
-do
+#
+# Finally configure repository to enable medias that were previously
+# used.
+#
+for media in "${media_default[@]}"; do
+	#
+	# The media might not exist.
+	#
+	relpath=$(urpm-repo --url=$(pwd) get "$media" path) || exit
+	mkdir -p media/$relpath
+
 	#
 	# Not sure what 'file-deps' is exactly used for but it's how
 	# the BS calls it, see:
@@ -365,7 +368,14 @@ do
 	genhdlist2 --quiet $verbose \
 	    --file-deps=media/media_info/file-deps \
 	    --allow-empty-media \
-	    $(dirname $d) || exit
+	    media/$relpath || exit
+
+	noauto=$(urpm-repo --url=$(pwd) get "$media" noauto) || exit
+	case $noauto in
+	1)
+		echo "Enabling media '$media'"
+		urpm-repo --url=$(pwd) set "$media" noauto 0 || exit ;;
+	esac
 done
 
 #
@@ -377,16 +387,3 @@ done
 # Some symlinks may be dangling so ignore any errors.
 #
 (cd media/media_info; md5sum hdlist_* synthesis.* >MD5SUM 2>/dev/null) || :
-
-#
-# Finally configure repository to enable medias that were previously
-# used.
-#
-for media in "${media_default[@]}"; do
-	noauto=$(urpm-repo --url=$(pwd) get "$media" noauto) || exit
-	case $noauto in
-	1)
-		echo "Enabling media '$media'"
-		urpm-repo --url=$(pwd) set "$media" noauto 0 || exit ;;
-	esac
-done

@@ -365,7 +365,7 @@ for media in "${media_selected[@]}"; do
 	#
 	# /usr/share/mga-youri-submit/lib/Youri/Submit/Post/Genhdlist2.pm
 	#
-	genhdlist2 --quiet $verbose \
+	genhdlist2 --quiet $verbose --xml-info \
 	    --file-deps=media/media_info/file-deps \
 	    --allow-empty-media \
 	    media/$relpath || exit

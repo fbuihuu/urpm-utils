@@ -370,6 +370,17 @@ for media in "${media_selected[@]}"; do
 	    --allow-empty-media \
 	    media/$relpath || exit
 
+	#
+	# Retrieve the public keys for each media
+	#
+	echo "Retrieving public key for media '$media'"
+	rsync -a $verbose						\
+	      ${distrib#ssh://}/media/$relpath/media_info/pubkey	\
+	      media/$relpath/media_info/
+
+	#
+	# Enable repo that was initially ignored.
+	#
 	noauto=$(urpm-repo --url=$(pwd) get "$media" noauto) || exit
 	case $noauto in
 	1)

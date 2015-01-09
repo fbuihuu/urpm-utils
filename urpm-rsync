@@ -41,7 +41,7 @@ dry_run=
 exclude_patterns=()
 filter_from=
 verbose=
-media_default=()
+media_selected=()
 media_included=()
 media_excluded=()
 
@@ -188,30 +188,30 @@ esac
 #
 # Setup the list of medias to use.
 #
-if test ${#media_default[*]} -lt 1; then
+if test ${#media_selected[*]} -lt 1; then
 	urpm-repo --url=$stupid_urpm_url list >$tmpdir/medias.lst ||
 	exit
 
 	while read media; do
-		media_default+=("$media")
+		media_selected+=("$media")
 	done <$tmpdir/medias.lst
 fi
 
 for included in "${media_included[@]}"; do
-	for media in "${media_default[@]}"; do
+	for media in "${media_selected[@]}"; do
 		test "$included" = "$media" && continue 2
 	done
-	media_default+=("$included")
+	media_selected+=("$included")
 done
 
 for excluded in "${media_excluded[@]}"; do
-	for i in ${!media_default[*]}; do
-		test "$excluded" = "${media_default[i]}" && unset media_default[$i]
+	for i in ${!media_selected[*]}; do
+		test "$excluded" = "${media_selected[i]}" && unset media_selected[$i]
 	done
 done
 
 media_opt="--media="
-for media in "${media_default[@]}"; do
+for media in "${media_selected[@]}"; do
 	media_opt+="$media,"
 done
 
@@ -352,7 +352,7 @@ cd $destination/${distrib##*/}
 # Finally configure repository to enable medias that were previously
 # used.
 #
-for media in "${media_default[@]}"; do
+for media in "${media_selected[@]}"; do
 	#
 	# The media might not exist.
 	#

@@ -94,3 +94,7 @@ To list all medias (including ignored ones):
 To enable one specific media in a local repository:
 
 : urpm-repo --url=/home/repos/factory/x86_64 set "Core Release" noauto 0
+
+To remove all unused/ignored medias:
+
+: urpm-repo --url=/home/repos/factory/x86_64 strip

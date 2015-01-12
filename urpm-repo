@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+import os
 import sys
 import shutil
 import tempfile
@@ -86,6 +87,26 @@ def do_show(args):
     for key, value in config.items(args.section):
         print('%s = %s' % (key, value))
 
+def do_strip(args):
+    removed = []
+
+    for section in config.sections():
+        if section == 'media_info':
+            continue
+        if config.get(section, 'noauto') == '0':
+            continue
+        config.remove_section(section)
+        removed.append(section)
+
+    if removed:
+        # This ensures the repo is local.
+        write_config()
+        for section in removed:
+            mediapath = os.path.join(args.url, 'media', section)
+            if os.path.exists(mediapath):
+                shutil.rmtree(mediapath)
+
+
 #
 # Arguments and options parsing.
 #
@@ -98,6 +119,7 @@ parser_get  = subparsers.add_parser('get',  help='Query a media property')
 parser_set  = subparsers.add_parser('set',  help='Set a media property (local repo only)')
 parser_list = subparsers.add_parser('list', help='List repository medias')
 parser_show = subparsers.add_parser('show', help='Show config of a specific media')
+parser_strip = subparsers.add_parser('strip', help='Remove all ignored medias from the repo (local repo only)')
 
 group = parser_list.add_mutually_exclusive_group()
 group.add_argument('--all', action="store_true", help='List all medias including ignored ones')
@@ -115,6 +137,8 @@ parser_set.set_defaults(func=do_set)
 
 parser_show.add_argument('media', help='Name of the media')
 parser_show.set_defaults(func=do_show)
+
+parser_strip.set_defaults(func=do_strip)
 
 args = parser.parse_args()
 

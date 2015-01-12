@@ -69,4 +69,28 @@ access the repositories are: ssh and rsync.
 
 ** Usage
 
-urpm-rsync --list=packages.lst rsync://mirrorsync@mirror.mandriva.com/factory/x86_64
+: urpm-rsync --list=packages.lst rsync://mirrorsync@mirror.mandriva.com/factory/x86_64
+
+* urpm-repo
+
+** Description
+
+This tool is used for querying a repository or configuring a *local*
+repository.
+
+Actually, it's a simple script that can parse repository configuration
+file (media.cfg) and can write it back if the repository is local.
+
+** Usage
+
+To list medias included in a repository:
+
+: urpm-repo --url=rsync://mirrorsync@mirror.mandriva.com/factory/x86_64 list
+
+To list all medias (including ignored ones):
+
+: urpm-repo --url=rsync://mirrorsync@mirror.mandriva.com/factory/x86_64 list --all
+
+To enable one specific media in a local repository:
+
+: urpm-repo --url=/home/repos/factory/x86_64 set "Core Release" noauto 0

@@ -26,10 +26,15 @@ config_defaults = {
 def fetch_config():
     if config_url.startswith('rsync://'):
         subprocess.call(['rsync', '-a', config_url, config_file.name])
-    elif config_url.startswith('/'):
+        return
+    if config_url.startswith('/'):
         shutil.copyfile(config_url, config_file.name)
-    else:
-        sys.exit('Unsupported protocol')
+        return
+
+    try:
+        subprocess.check_call(['curl', '--fail', '-s', '-o', config_file.name, config_url])
+    except subprocess.CalledProcessError:
+        sys.exit('Wrong URL or unsupported protocol.')
 
 def push_config():
     if not config_url.startswith('/'):

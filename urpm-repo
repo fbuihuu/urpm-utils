@@ -116,7 +116,7 @@ def do_strip(args):
 # Arguments and options parsing.
 #
 parser = argparse.ArgumentParser(description="Configure an urpm repository")
-parser.add_argument('--url', required=True,
+parser.add_argument('-u', '--url', required=True,
                     help='URL of the repository to use')
 
 subparsers  = parser.add_subparsers()

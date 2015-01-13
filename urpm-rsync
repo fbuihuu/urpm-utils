@@ -296,30 +296,6 @@ get_all_dependencies "${packages[@]}" >$tmpdir/dependencies-sorted.lst ||
 exit
 
 #
-# Import the packages and their deps only. We do that by importing all
-# directories in the hierarchy to allow rsync to descend in
-# directories containing the packages. We use --prune-empty-dirs to
-# get ride of the uneeded directories after that.
-#
-for p in $(< $tmpdir/dependencies-sorted.lst); do
-	echo "+ $p-[[:digit:]]*.rpm"
-done >$tmpdir/rsync-filter-rpm
-
-cat >$tmpdir/rsync-filter-packages<<EOF
-+ */
-${filter_from:+. $filter_from}
-. $tmpdir/rsync-filter-rpm
-- *
-EOF
-
-echo "Importing repository..."
-rsync -a $verbose $dry_run				\
-	--prune-empty-dirs				\
-	"${exclude_patterns[@]}"			\
-	--filter=". $tmpdir/rsync-filter-packages"	\
-	${distrib#ssh://} $destination &&
-
-#
 # Import main media_info/ which includes media.cfg.
 #
 # Don't overwrite its content which could have been updated on the
@@ -339,6 +315,47 @@ rsync -a $verbose $dry_run --update			\
 	${distrib#ssh://} $destination ||
 exit
 
+# Now that the main repo config file has been imported we can retrieve
+# media paths quickly.
+declare -A path_selected
+
+url=$destination/${distrib##*/}
+for media in "${media_selected[@]}"; do
+	path_selected["$media"]=$(urpm-repo --url=$url get "$media" path) ||
+	exit
+done
+
+#
+# Import the packages and their deps only. We make sure to select
+# medias that are enabled only.
+#
+for p in $(< $tmpdir/dependencies-sorted.lst); do
+	echo "+ $p-[[:digit:]]*.rpm"
+done >$tmpdir/rsync-filter-rpm
+
+# select enabled medias only.
+for p in "${path_selected[@]}"; do
+	echo "+ /*/"
+	echo "+ /*/media/"
+	echo "+ /*/media/$(dirname $p)/"
+	echo "+ /*/media/$p/"
+done | sort | uniq >$tmpdir/rsync-filter-medias
+
+cat >$tmpdir/rsync-filter-packages<<EOF
+${filter_from:+. $filter_from}
+. $tmpdir/rsync-filter-medias
+. $tmpdir/rsync-filter-rpm
+- *
+EOF
+
+echo "Importing repository..."
+rsync -a $verbose $dry_run				\
+	--prune-empty-dirs				\
+	"${exclude_patterns[@]}"			\
+	--filter=". $tmpdir/rsync-filter-packages"	\
+	${distrib#ssh://} $destination &&
+
+
 test -n "$dry_run" &&
 exit
 
@@ -354,9 +371,10 @@ cd $destination/${distrib##*/}
 #
 for media in "${media_selected[@]}"; do
 	#
-	# The media might not exist.
+	# The media dir might not exist if no package have been
+	# imported from it.
 	#
-	relpath=$(urpm-repo --url=$(pwd) get "$media" path) || exit
+	relpath=${path_selected["$media"]}
 	mkdir -p media/$relpath
 
 	#

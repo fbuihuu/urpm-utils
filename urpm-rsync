@@ -252,6 +252,7 @@ _get_all_dependencies () {
 	# urpmq(1) prints some debug outputs on stderr if ssh protocol
 	# is used...
 	urpmq --use-distrib $stupid_urpm_url \
+	      -r \
 	      "$media_opt" \
 	      --requires-recursive "$@" \
 	      >$tmpdir/deps.lst 2>$tmpdir/urpmq-stderr.log
@@ -330,7 +331,7 @@ done
 # medias that are enabled only.
 #
 for p in $(< $tmpdir/dependencies-sorted.lst); do
-	echo "+ $p-[[:digit:]]*.rpm"
+	echo "+ $p.*.rpm"
 done >$tmpdir/rsync-filter-rpm
 
 # select enabled medias only.

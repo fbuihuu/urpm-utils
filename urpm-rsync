@@ -249,12 +249,17 @@ select_candidate () {
 }
 
 _get_all_dependencies () {
+	#
+	# As already explained 'urpmq --use-distrib xxx --media xxx'
+	# can't be used.
+	#
 	# urpmq(1) prints some debug outputs on stderr if ssh protocol
 	# is used...
-	urpmq --use-distrib $stupid_urpm_url \
-	      -r \
+	#
+	urpmq --urpmi-root $tmpdir/urpmi-root \
 	      --media "$medias_opt" \
-	      --requires-recursive "$@" \
+	      --requires-recursive \
+	      -r "$@" \
 	      >$tmpdir/deps.lst 2>$tmpdir/urpmq-stderr.log
 
 	# urpmq is boggus: it can return 0 even when failing so try
@@ -288,6 +293,32 @@ _get_all_dependencies () {
 }
 
 get_all_dependencies () {
+	#
+	# Create a local urpmi setup that uses the remote repository.
+	#
+	# This is needed since we can't use the following command to
+	# retrieve the packages' deps:
+	#
+	#   'urpmq --use-distrib xxx --media xxx,xxx'
+	#
+	# Indeed this command create a temporary config as we do but
+	# it also renames all medias it contains by appending
+	# '(Virtual X)' suffix ! So for example 'Core Release' is
+	# renamed 'Core Release (Virtual 1)'...
+	#
+	# Then the names of the media will no longer match the ones
+	# passed to --media options. In that case urpm will switch to
+	# a fuzzy match (not documented) and --media 'Core Release'
+	# will then match 'Core Release Debug (Virtual 2)', 'Core
+	# Release Testing (Virtual 3)', etc...
+	#
+	# Crazy tool...
+	#
+	mkdir -p $tmpdir/urpmi-root # the dir can already exist if we're reusing tmpdir
+	urpmi.addmedia -q --urpmi-root $tmpdir/urpmi-root --distrib $stupid_urpm_url &&
+	urpmi.update   -q --urpmi-root $tmpdir/urpmi-root "${media_selected[@]}" ||
+	return
+
 	> $tmpdir/deps-visited.lst
 	_get_all_dependencies "$@" | sort | uniq
 }
@@ -363,7 +394,6 @@ exit
 #
 # Generate hdlists and enable medias previously used.
 #
-echo "Updating hdlists..."
 cd $destination/${distrib##*/}
 
 #
@@ -384,6 +414,7 @@ for media in "${media_selected[@]}"; do
 	#
 	# /usr/share/mga-youri-submit/lib/Youri/Submit/Post/Genhdlist2.pm
 	#
+	echo "Updating hdlists for '$media'"
 	genhdlist2 --quiet $verbose --xml-info \
 	    --file-deps=media/media_info/file-deps \
 	    --allow-empty-media \

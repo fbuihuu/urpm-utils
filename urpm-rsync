@@ -210,9 +210,9 @@ for excluded in "${media_excluded[@]}"; do
 	done
 done
 
-media_opt="--media="
+medias_opt=""
 for media in "${media_selected[@]}"; do
-	media_opt+="$media,"
+	medias_opt+="$media,"
 done
 
 #
@@ -253,7 +253,7 @@ _get_all_dependencies () {
 	# is used...
 	urpmq --use-distrib $stupid_urpm_url \
 	      -r \
-	      "$media_opt" \
+	      --media "$medias_opt" \
 	      --requires-recursive "$@" \
 	      >$tmpdir/deps.lst 2>$tmpdir/urpmq-stderr.log
 

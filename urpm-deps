@@ -1,0 +1,235 @@
+#! /usr/bin/env python3
+
+import os
+import sys
+import fnmatch
+import argparse
+from subprocess import check_call, check_output, CalledProcessError, DEVNULL
+
+
+verbose = False
+reverse = False
+max_depth = None
+packages_ignored = set()
+packages_ignored_patterns = set() # packages subject to Unix filename pattern matching
+ignored_default = set(['glibc', 'systemd', 'rpm-helper', 'bash', 'libgcc*', 'libstdc++*'])
+
+
+def say(msg):
+    if verbose:
+        sys.stderr.write(msg + "\n")
+
+def warn(msg):
+    sys.stderr.write("Warning: " + msg + "\n")
+
+def die(msg):
+    sys.stderr.write("Error: " + msg + "\n")
+    exit(1)
+
+
+aliases = {}
+
+def get_dependencies(pkg):
+    opts = ['--requires' if not reverse else '--whatrequires']
+
+    #
+    # Plug stderr to /dev/null to get rid of the annoying warning:
+    # "--requires behaviour changed, use --requires-recursive to get the old behaviour"
+    #
+    try:
+        ugly_deps = check_output(['urpmq'] + opts + [pkg],
+                                 stderr=DEVNULL,
+                                 universal_newlines=True)
+    except CalledProcessError:
+        die("package '%s' unknown" % pkg)
+
+    #
+    # Sanitize the result returns by urpmq(1)
+    #
+    deps = set()
+    for d in set(ugly_deps.splitlines()):
+        #
+        # Strip the version constraint suffixes added by urpmq(1),
+        # since urpmq(1) won't be able to handle it later :-/
+        #
+        for sep in ('['):
+            l = d.split(sep)
+            if len(l) > 1:
+                d = l[0]
+                break
+        #
+        # urpmq(1) can return paths, typelib(x) and a lot more
+        # fancier names. So sanitize them by converting the fancy name
+        # into a package one.
+        #
+        if d not in aliases:
+            try:
+                x = check_output(['urpmq', '--whatprovides', d],
+                                 universal_newlines=True).rstrip()
+            except CalledProcessError:
+                warn("no package provides '%s' required by '%s', skipping this dep" % (d, pkg))
+                continue
+            #
+            # Deal with multiple candidates. For now do it the simplest
+            # way.
+            #
+            aliases[d] = x.split('|')[0]
+        d = aliases[d]
+
+        #
+        # Filter out the packages we're not interested in.
+        #
+        if d == pkg:
+            continue
+        if d in packages_ignored:
+            continue
+        for pattern in packages_ignored_patterns:
+            if fnmatch.fnmatchcase(d, pattern):
+                break
+        else:
+            deps.add(d)
+
+    return deps
+
+#
+# 'dot' subcommand.
+#
+def dot_requires_one(p, visited=set(), level=1):
+    if max_depth is not None:
+        if level > max_depth:
+            return
+    if p not in visited:
+        visited.add(p)
+
+        deps = get_dependencies(p)
+        for d in deps:
+            print('  "%s" -> "%s";' % (d, p) if reverse else (p, d))
+        for d in deps:
+            dot_requires_one(d, visited, level+1)
+
+
+def dot_requires(packages, expand=False, concentrate=False):
+    print('digraph "%s" {' % " ".join(sys.argv))
+    print('  compound=%s;'    % ("true" if expand else "false"))
+    print('  concentrate=%s;' % ("true" if concentrate else "false"))
+
+    for p in packages:
+        dot_requires_one(p)
+
+    print('}')
+
+
+def do_dot(args):
+    dot_requires(args.packages)
+
+#
+# 'tree' subcommand.
+#
+ansi_color_escape_map = {
+    'red'       : "\x1B[31m",
+    'yellow'    : "\x1B[33m",
+    'green'     : "\x1B[32m",
+    'off'       : "\x1B[0m",
+}
+
+
+def tree_requires_print(p, branches, last, color=None):
+    print('%s%s ' % (branches, '└─' if last else '├─'), end='')
+    if color and sys.stdout.isatty():
+        print('%s%s%s' % (ansi_color_escape_map[color], p, ansi_color_escape_map['off']))
+    else:
+        print(p)
+
+
+def tree_requires_one(p, level=1, branches='   ', visited=set(), visited_branch=set()):
+    if max_depth is not None:
+        if level > max_depth:
+            return
+
+    assert(p not in visited)
+    visited.add(p)
+    visited_branch.add(p)
+
+    deps = get_dependencies(p)
+    for i, d in enumerate(deps):
+        last = i+1 == len(deps)
+
+        if d in visited_branch:
+            #
+            # Highlight cyclic dependency.
+            #
+            tree_requires_print('%s...' % d, branches, last, 'red')
+        elif d in visited:
+            #
+            # Don't recurse into the same package if it's already
+            # been visited by another branch.
+            #
+            tree_requires_print('%s...' % d, branches, last, 'green')
+        else:
+            tree_requires_print(d, branches, last)
+            branches += '│  ' if not last else '   '
+            tree_requires_one(d, level+1, branches, visited)
+            branches = branches[:-3]
+
+    visited_branch.remove(p)
+
+
+def do_tree(args):
+    print("%s" % args.package)
+    tree_requires_one(args.package)
+
+#
+#
+#
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="A tool to analyze package dependencies")
+    parser.add_argument("-q", "--quiet", action="store_true", help="be quiet")
+    subparsers = parser.add_subparsers()
+
+    # 'dot' sucommand specific options
+    parser_dot = subparsers.add_parser('dot', help='generate a textual dependency graph description in dot format')
+    parser_dot.add_argument('packages', nargs='+', help='list of the packages to start the analyze from')
+    parser_dot.set_defaults(func=do_dot)
+
+    # 'tree' subcommand specific options
+    parser_tree = subparsers.add_parser('tree', help='show dependencies of the specified package')
+    parser.add_argument('--no-pager',  action="store_true", help='do not pipe output into a pager')
+    parser_tree.add_argument('package', help='package name')
+    parser_tree.set_defaults(func=do_tree)
+
+    # subcommands common options
+    for sp in (parser_dot, parser_tree):
+        sp.add_argument('--all', action="store_true", help='include packages suppressed by default (glibc...)')
+        sp.add_argument('--reverse', action="store_true", help='show reverse dependencies')
+        sp.add_argument('--max-depth', type=int, help='limit the number of levels of dependencies')
+        sp.add_argument('--ignore', nargs='+', help='list of packages to ignore', metavar='package')
+
+    args = parser.parse_args()
+    verbose = not args.quiet
+    reverse = args.reverse
+    max_depth = args.max_depth
+
+    if verbose:
+        say("If one of the following medias contains source packages, then")
+        say("the generated graph will contain build dependencies too.")
+        say("")
+        say("List of active medias:")
+        say("----------------------")
+        check_call(['urpmq', '--list-media', 'active'], stdout=sys.stderr.buffer)
+        say("----------------------")
+
+    if not args.all:
+        packages_ignored |= ignored_default
+    if args.ignore:
+        packages_ignored |= set(args.ignore)
+    for p in packages_ignored.copy():
+        # any shell-style wildcards ?
+        for schar in ('*', '?', '['):
+            if schar in p:
+                packages_ignored.remove(p)
+                packages_ignored_patterns.add(p)
+
+    try:
+        sys.exit(args.func(args))
+    except KeyboardInterrupt:
+        sys.exit("Interrupted.")

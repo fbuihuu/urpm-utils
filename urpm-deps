@@ -64,19 +64,7 @@ def _get_local_rdependencies(pkg):
             # of returning an empty value.
             x = ''
 
-        for p in x.splitlines():
-            #
-            # Filter out the packages we're not interested in.
-            #
-            if p == pkg:
-                continue
-            if p in packages_ignored:
-                continue
-            for pattern in packages_ignored_patterns:
-                if fnmatch.fnmatchcase(p, pattern):
-                    break
-            else:
-                rdeps.add(p)
+        rdeps.update(x.splitlines())
 
     return rdeps
 
@@ -134,28 +122,30 @@ def _get_dependencies(pkg):
                              universal_newlines=True).rstrip()
             aliases[d] = x.split(None if cmd == rpm else '|')[0]
 
-        d = aliases[d]
-
-        #
-        # Filter out the packages we're not interested in.
-        #
-        if d == pkg:
-            continue
-        if d in packages_ignored:
-            continue
-        for pattern in packages_ignored_patterns:
-            if fnmatch.fnmatchcase(d, pattern):
-                break
-        else:
-            deps.add(d)
+        deps.add(aliases[d])
 
     return deps
 
 
 def get_dependencies(pkg):
     if local and reverse:
-        return _get_local_rdependencies(pkg)
-    return _get_dependencies(pkg)
+        deps = _get_local_rdependencies(pkg)
+    else:
+        deps = _get_dependencies(pkg)
+
+    # Filter out packages the user is not interested in.
+    for d in deps.copy():
+        if d == pkg:
+            deps.remove(d)
+        elif d in packages_ignored:
+            deps.remove(d)
+        else:
+            for pattern in packages_ignored_patterns:
+                if fnmatch.fnmatchcase(d, pattern):
+                    deps.remove(d)
+                    break
+
+    return deps
 
 #
 # 'dot' subcommand.

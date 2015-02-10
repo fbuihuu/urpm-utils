@@ -7,6 +7,7 @@ import argparse
 from subprocess import check_call, check_output, CalledProcessError, DEVNULL
 
 
+local   = False
 verbose = False
 reverse = False
 max_depth = None
@@ -26,54 +27,113 @@ def die(msg):
     sys.stderr.write("Error: " + msg + "\n")
     exit(1)
 
+def bug(msg):
+    sys.stderr.write("BUG: " + msg + "\n")
+    exit(1)
+
 
 aliases = {}
 
-def get_dependencies(pkg):
-    opts = ['--requires' if not reverse else '--whatrequires']
+rpm   = ['rpm', '-q', '--qf', '%{NAME}\n']
+urpmq = ['urpmq']
 
+#
+# Special case using rpm(1) to find out reverse dependencies: rpm(1)
+# is not clever enough to find out packages which require another
+# package. We need to ask it which packages require this *provide*.
+#
+def _get_local_rdependencies(pkg):
+    # This shouldn't fail except for the very first
+    # package. FIXME: we should ensure that the package passed by
+    # the user is correct.
+    provides = check_output(rpm + ['--provides', pkg],
+                              universal_newlines=True)
+
+    rdeps = set()
+    for d in set(provides.splitlines()):
+        # Strip the version constraint if present.
+        d = d.split()[0]
+
+        # In reverse mode, we search for all packages using one of the
+        # package's provides.
+        try:
+            x = check_output(rpm + ['--whatrequires', d],
+                             universal_newlines=True).rstrip()
+        except CalledProcessError:
+            # rpm(1) will fail when using '--whatrequires' instead
+            # of returning an empty value.
+            x = ''
+
+        for p in x.splitlines():
+            #
+            # Filter out the packages we're not interested in.
+            #
+            if p == pkg:
+                continue
+            if p in packages_ignored:
+                continue
+            for pattern in packages_ignored_patterns:
+                if fnmatch.fnmatchcase(p, pattern):
+                    break
+            else:
+                rdeps.add(p)
+
+    return rdeps
+
+
+def _get_dependencies(pkg):
+    #
+    # rpm(1) --whatrequires needs a special treatment.
+    #
+    assert(not(local and reverse))
+
+    # This shouldn't fail except for the very first
+    # package. FIXME: we should ensure that the package passed by
+    # the user is correct.
     #
     # Plug stderr to /dev/null to get rid of the annoying warning:
     # "--requires behaviour changed, use --requires-recursive to get the old behaviour"
     #
-    try:
-        ugly_deps = check_output(['urpmq'] + opts + [pkg],
-                                 stderr=DEVNULL,
-                                 universal_newlines=True)
-    except CalledProcessError:
-        die("package '%s' unknown" % pkg)
+    cmd  = rpm if local else urpmq
+    opts = ['--requires' if not reverse else '--whatrequires']
 
-    #
-    # Sanitize the result returns by urpmq(1)
-    #
+    ugly_deps = check_output(cmd + opts + [pkg],
+                             stderr=DEVNULL if cmd != rpm else None,
+                             universal_newlines=True)
+
     deps = set()
     for d in set(ugly_deps.splitlines()):
         #
-        # Strip the version constraint suffixes added by urpmq(1),
-        # since urpmq(1) won't be able to handle it later :-/
+        # Strip the version constraint suffixes
         #
-        for sep in ('['):
-            l = d.split(sep)
-            if len(l) > 1:
-                d = l[0]
-                break
+        if cmd == rpm:
+            d = d.split()[0]
+        else:
+            # urpmq(1) reports version constraint in []
+            for sep in ('['):
+                l = d.split(sep)
+                if len(l) > 1:
+                    d = l[0]
+                    break
+
+        #
+        # rpmlib(x) deps are really not interesting for us. It's
+        # normally only reported by rpm(1), but it shouldn't hurt
+        # for the other case.
+        #
+        if d.startswith('rpmlib'):
+            continue
+
         #
         # urpmq(1) can return paths, typelib(x) and a lot more
         # fancier names. So sanitize them by converting the fancy name
         # into a package one.
         #
         if d not in aliases:
-            try:
-                x = check_output(['urpmq', '--whatprovides', d],
-                                 universal_newlines=True).rstrip()
-            except CalledProcessError:
-                warn("no package provides '%s' required by '%s', skipping this dep" % (d, pkg))
-                continue
-            #
-            # Deal with multiple candidates. For now do it the simplest
-            # way.
-            #
-            aliases[d] = x.split('|')[0]
+            x = check_output(cmd + ['--whatprovides', d],
+                             universal_newlines=True).rstrip()
+            aliases[d] = x.split(None if cmd == rpm else '|')[0]
+
         d = aliases[d]
 
         #
@@ -90,6 +150,12 @@ def get_dependencies(pkg):
             deps.add(d)
 
     return deps
+
+
+def get_dependencies(pkg):
+    if local and reverse:
+        return _get_local_rdependencies(pkg)
+    return _get_dependencies(pkg)
 
 #
 # 'dot' subcommand.
@@ -199,23 +265,25 @@ if __name__ == "__main__":
 
     # subcommands common options
     for sp in (parser_dot, parser_tree):
+        sp.add_argument('--local', action="store_true", help='analyze the host system instead of the repository')
         sp.add_argument('--all', action="store_true", help='include packages suppressed by default (glibc...)')
         sp.add_argument('--reverse', action="store_true", help='show reverse dependencies')
         sp.add_argument('--max-depth', type=int, help='limit the number of levels of dependencies')
         sp.add_argument('--ignore', nargs='+', help='list of packages to ignore', metavar='package')
 
     args = parser.parse_args()
+    local = args.local
     verbose = not args.quiet
     reverse = args.reverse
     max_depth = args.max_depth
 
-    if verbose:
+    if not local and verbose:
         say("If one of the following medias contains source packages, then")
         say("the generated graph will contain build dependencies too.")
         say("")
         say("List of active medias:")
         say("----------------------")
-        check_call(['urpmq', '--list-media', 'active'], stdout=sys.stderr.buffer)
+        check_call(urpmq + ['--list-media', 'active'], stdout=sys.stderr.buffer)
         say("----------------------")
 
     if not args.all:

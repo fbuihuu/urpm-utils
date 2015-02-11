@@ -198,12 +198,13 @@ def tree_requires_print(p, branches, last, color=None):
         print(p)
 
 
+# Mutable default arguments are intendend here: we want to show only
+# once a package and its deps even when several roots are used.
 def tree_requires_one(p, level=1, branches='   ', visited=set(), visited_branch=set()):
     if max_depth is not None:
         if level > max_depth:
             return
 
-    assert(p not in visited)
     visited.add(p)
     visited_branch.add(p)
 

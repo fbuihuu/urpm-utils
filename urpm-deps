@@ -234,8 +234,9 @@ def tree_requires_one(p, level=1, branches='   ', visited=set(), visited_branch=
 
 
 def do_tree(args):
-    print("%s" % args.package)
-    tree_requires_one(args.package)
+    for p in args.packages:
+        print("%s" % p)
+        tree_requires_one(p)
 
 #
 #
@@ -247,13 +248,11 @@ if __name__ == "__main__":
 
     # 'dot' sucommand specific options
     parser_dot = subparsers.add_parser('dot', help='generate a textual dependency graph description in dot format')
-    parser_dot.add_argument('packages', nargs='+', help='list of the packages to start the analyze from')
     parser_dot.set_defaults(func=do_dot)
 
     # 'tree' subcommand specific options
     parser_tree = subparsers.add_parser('tree', help='show dependencies of the specified package')
     parser.add_argument('--no-pager',  action="store_true", help='do not pipe output into a pager')
-    parser_tree.add_argument('package', help='package name')
     parser_tree.set_defaults(func=do_tree)
 
     # subcommands common options
@@ -263,6 +262,7 @@ if __name__ == "__main__":
         sp.add_argument('--reverse', action="store_true", help='show reverse dependencies')
         sp.add_argument('--max-depth', type=int, help='limit the number of levels of dependencies')
         sp.add_argument('--ignore', nargs='+', help='list of packages to ignore', metavar='package')
+        sp.add_argument('packages', nargs='+', help='list of the packages to start the analyze from')
 
     args = parser.parse_args()
     local = args.local

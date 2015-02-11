@@ -51,9 +51,8 @@ def check_text_output(*args, **kwargs):
 # package. We need to ask it which packages require this *provide*.
 #
 def _get_local_rdependencies(pkg):
-    # This shouldn't fail except for the very first
-    # package. FIXME: we should ensure that the package passed by
-    # the user is correct.
+    # This shouldn't fail since all pkg names have been initially
+    # checked otherwise they're issued from rpm.
     provides = check_text_output(rpm + ['--provides', pkg])
 
     rdeps = set()
@@ -81,9 +80,6 @@ def _get_dependencies(pkg):
     #
     assert(not(local and reverse))
 
-    # This shouldn't fail except for the very first
-    # package. FIXME: we should ensure that the package passed by
-    # the user is correct.
     #
     # Plug stderr to /dev/null to get rid of the annoying warning:
     # "--requires behaviour changed, use --requires-recursive to get the old behaviour"
@@ -92,6 +88,8 @@ def _get_dependencies(pkg):
     opts = ['--requires' if not reverse else '--whatrequires']
     stderr = DEVNULL if cmd == urpmq else None
 
+    # This shouldn't fail since all pkg names have been initially
+    # checked otherwise they're issued from rpm.
     ugly_deps = check_text_output(cmd + opts + [pkg], stderr=stderr)
 
     deps = set()
@@ -279,6 +277,20 @@ if __name__ == "__main__":
         check_call(urpmq + ['--list-media', 'active'], stdout=sys.stderr.buffer)
         say("----------------------")
 
+    #
+    # Check the validity of packages names given by the user.
+    #
+    for p in args.packages:
+        cmd = rpm if local else urpmq
+        try:
+            # rpm(1) reports error on stdout...
+            check_call(cmd + [p], stdout=DEVNULL, stderr=DEVNULL)
+        except CalledProcessError:
+            die("Unknown package '%s'" % p)
+
+    #
+    # Init filters.
+    #
     if not args.all:
         packages_ignored |= ignored_default
     if args.ignore:

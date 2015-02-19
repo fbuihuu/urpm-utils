@@ -11,6 +11,7 @@ local   = False
 verbose = False
 reverse = False
 max_depth = None
+force_color = False
 packages_ignored = set()
 packages_ignored_patterns = set() # packages subject to Unix filename pattern matching
 ignored_default = set(['glibc', 'systemd', 'rpm-helper', 'bash', 'libgcc*', 'libstdc++*'])
@@ -192,7 +193,7 @@ ansi_color_escape_map = {
 
 def tree_requires_print(p, branches, last, color=None):
     print('%s%s ' % (branches, '└─' if last else '├─'), end='')
-    if color and sys.stdout.isatty():
+    if color and (sys.stdout.isatty() or force_color):
         print('%s%s%s' % (ansi_color_escape_map[color], p, ansi_color_escape_map['off']))
     else:
         print(p)
@@ -251,7 +252,8 @@ if __name__ == "__main__":
 
     # 'tree' subcommand specific options
     parser_tree = subparsers.add_parser('tree', help='show dependencies of the specified package')
-    parser.add_argument('--no-pager',  action="store_true", help='do not pipe output into a pager')
+    parser_tree.add_argument('--no-pager',  action="store_true", help='do not pipe output into a pager')
+    parser_tree.add_argument('--color', '--colour', action="store_true", help='force colours usage')
     parser_tree.set_defaults(func=do_tree)
 
     # subcommands common options
@@ -268,6 +270,9 @@ if __name__ == "__main__":
     verbose = not args.quiet
     reverse = args.reverse
     max_depth = args.max_depth
+
+    if local:
+        force_color = args.color
 
     if not local and verbose:
         say("If one of the following medias contains source packages, then")

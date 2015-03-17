@@ -234,6 +234,10 @@ def tree_requires_one(p, level=1, branches='   ', visited=set(), visited_branch=
 
 
 def do_tree(args):
+    global force_color
+
+    force_color = args.color
+
     for p in args.packages:
         print("%s" % p)
         tree_requires_one(p)
@@ -270,9 +274,6 @@ if __name__ == "__main__":
     verbose = not args.quiet
     reverse = args.reverse
     max_depth = args.max_depth
-
-    if rpm_db:
-        force_color = args.color
 
     if not rpm_db and verbose:
         say("If one of the following medias contains source packages, then")

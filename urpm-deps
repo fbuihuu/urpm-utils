@@ -101,6 +101,12 @@ def _get_dependencies(pkg):
         if cmd == rpm:
             d = d.split()[0]
         else:
+            # urpmq --requires, uses '<package>:' prefix when
+            # displaying dependencies for a non-installed package
+            # otherwise it probably uses rpm's output directly. Nice.
+            if d.startswith(pkg + ':'):
+                d = d[len(pkg)+1:].lstrip()
+
             # urpmq(1) reports version constraint in []
             for sep in ('['):
                 l = d.split(sep)

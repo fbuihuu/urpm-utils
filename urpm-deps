@@ -7,7 +7,7 @@ import argparse
 from subprocess import check_call, check_output, CalledProcessError, DEVNULL
 
 
-local   = False
+rpm_db  = False
 verbose = False
 reverse = False
 max_depth = None
@@ -79,13 +79,13 @@ def _get_dependencies(pkg):
     #
     # rpm(1) --whatrequires needs a special treatment.
     #
-    assert(not(local and reverse))
+    assert(not(rpm_db and reverse))
 
     #
     # Plug stderr to /dev/null to get rid of the annoying warning:
     # "--requires behaviour changed, use --requires-recursive to get the old behaviour"
     #
-    cmd  = rpm if local else urpmq
+    cmd  = rpm if rpm_db else urpmq
     opts = ['--requires' if not reverse else '--whatrequires']
     stderr = DEVNULL if cmd == urpmq else None
 
@@ -131,7 +131,7 @@ def _get_dependencies(pkg):
 
 
 def get_dependencies(pkg):
-    if local and reverse:
+    if rpm_db and reverse:
         deps = _get_local_rdependencies(pkg)
     else:
         deps = _get_dependencies(pkg)
@@ -258,7 +258,7 @@ if __name__ == "__main__":
 
     # subcommands common options
     for sp in (parser_dot, parser_tree):
-        sp.add_argument('--local', action="store_true", help='analyze the host system instead of the repository')
+        sp.add_argument('--urpmi-db', action="store_true", help='use urpmi database instead of rpm (local) one')
         sp.add_argument('--all', action="store_true", help='include packages suppressed by default (glibc...)')
         sp.add_argument('--reverse', action="store_true", help='show reverse dependencies')
         sp.add_argument('--max-depth', type=int, help='limit the number of levels of dependencies')
@@ -266,15 +266,15 @@ if __name__ == "__main__":
         sp.add_argument('packages', nargs='+', help='list of the packages to start the analyze from')
 
     args = parser.parse_args()
-    local = args.local
+    rpm_db  = not args.urpmi_db
     verbose = not args.quiet
     reverse = args.reverse
     max_depth = args.max_depth
 
-    if local:
+    if rpm_db:
         force_color = args.color
 
-    if not local and verbose:
+    if not rpm_db and verbose:
         say("If one of the following medias contains source packages, then")
         say("the generated graph will contain build dependencies too.")
         say("")
@@ -287,7 +287,7 @@ if __name__ == "__main__":
     # Check the validity of packages names given by the user.
     #
     for p in args.packages:
-        cmd = rpm if local else urpmq
+        cmd = rpm if rpm_db else urpmq
         try:
             # rpm(1) reports error on stdout...
             check_call(cmd + [p], stdout=DEVNULL, stderr=DEVNULL)

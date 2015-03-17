@@ -167,7 +167,7 @@ def dot_requires_one(p, visited=set(), level=1):
 
         deps = get_dependencies(p)
         for d in deps:
-            print('  "%s" -> "%s";' % (d, p) if reverse else (p, d))
+            print('  "%s" -> "%s";' % ((d, p) if reverse else (p, d)))
         for d in deps:
             dot_requires_one(d, visited, level+1)
 

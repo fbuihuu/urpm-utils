@@ -98,3 +98,26 @@ To enable one specific media in a local repository:
 To remove all unused/ignored medias:
 
 : urpm-repo --url=/home/repos/factory/x86_64 strip
+* urpm-tree
+** Description
+
+This tool is used to visualize package dependencies.
+
+For now, two viewers are available.
+
+One viewer, invoked by the /tree/ command, is a simple package
+dependecy tree viewer: a tree-like output is generated.
+
+The other viewer is actually not a viewer but it generates textual
+dependency graph description in dot format for further processing with
+the GraphViz dot(1) tool.
+
+By default, package dependencies are read from the rpm's local
+database. If /--urpmi-db/ option is passed, then urpmi's database is used
+instead.
+
+** Usage
+
+: urpm-deps dot --reverse alsaplayer | dot -Tsvg > alsaplayer-rdeps.svg
+
+: urpm-deps tree alsaplayer

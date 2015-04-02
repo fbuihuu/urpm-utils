@@ -4,7 +4,7 @@ import os
 import sys
 import fnmatch
 import argparse
-from subprocess import check_call, check_output, CalledProcessError, DEVNULL
+from subprocess import call, check_call, check_output, CalledProcessError, DEVNULL
 
 
 rpm_db  = False
@@ -20,6 +20,9 @@ ignored_default = set(['glibc', 'systemd', 'rpm-helper', 'bash', 'libgcc*', 'lib
 def say(msg):
     if verbose:
         sys.stderr.write(msg + "\n")
+
+def pr_err(msg):
+    sys.stderr.write(msg + "\n")
 
 def warn(msg):
     sys.stderr.write("Warning: " + msg + "\n")
@@ -75,11 +78,18 @@ def _get_local_rdependencies(pkg):
     return rdeps
 
 
-def _get_dependencies(pkg):
+def _get_dependencies(pkg, br=False):
     #
     # rpm(1) --whatrequires needs a special treatment.
     #
     assert(not(rpm_db and reverse))
+
+    #
+    # 'urpmq --whatrequires --build-requires' is broken.
+    #
+    if br:
+        assert(not reverse)
+        assert(not rpm_db)
 
     #
     # Plug stderr to /dev/null to get rid of the annoying warning:
@@ -91,6 +101,8 @@ def _get_dependencies(pkg):
 
     # This shouldn't fail since all pkg names have been initially
     # checked otherwise they're issued from rpm.
+    if br:
+        opts += ['--src']
     ugly_deps = check_text_output(cmd + opts + [pkg], stderr=stderr)
 
     deps = set()
@@ -136,11 +148,11 @@ def _get_dependencies(pkg):
     return deps
 
 
-def get_dependencies(pkg):
+def get_dependencies(pkg, br=False):
     if rpm_db and reverse:
         deps = _get_local_rdependencies(pkg)
     else:
-        deps = _get_dependencies(pkg)
+        deps = _get_dependencies(pkg, br)
 
     # Filter out packages the user is not interested in.
     for d in deps.copy():
@@ -158,33 +170,43 @@ def get_dependencies(pkg):
 #
 # 'dot' subcommand.
 #
-def dot_requires_one(p, visited=set(), level=1):
+def dot_print_dependency(d, p, reverse, br):
+    attributes = []
+    if br:
+        attributes.append('color=darkgoldenrod')
+    if reverse:
+        d, p = p, d
+
+    print('  "%s" -> "%s" [%s];' % (p, d, ','.join(attributes)))
+
+
+def dot_requires_one(p, visited=set(), level=1, br=False):
     if max_depth is not None:
         if level > max_depth:
             return
     if p not in visited:
         visited.add(p)
 
-        deps = get_dependencies(p)
+        deps = get_dependencies(p, br)
         for d in deps:
-            print('  "%s" -> "%s";' % ((d, p) if reverse else (p, d)))
+            dot_print_dependency(d, p, reverse, br)
         for d in deps:
             dot_requires_one(d, visited, level+1)
 
 
-def dot_requires(packages, expand=False, concentrate=False):
+def dot_requires(packages, br=False, expand=False, concentrate=False):
     print('digraph "%s" {' % " ".join(sys.argv))
     print('  compound=%s;'    % ("true" if expand else "false"))
     print('  concentrate=%s;' % ("true" if concentrate else "false"))
 
     for p in packages:
-        dot_requires_one(p)
+        dot_requires_one(p, br=br)
 
     print('}')
 
 
 def do_dot(args):
-    dot_requires(args.packages)
+    dot_requires(args.packages, br=args.build_requires)
 
 #
 # 'tree' subcommand.
@@ -207,7 +229,7 @@ def tree_requires_print(p, branches, last, color=None):
 
 # Mutable default arguments are intendend here: we want to show only
 # once a package and its deps even when several roots are used.
-def tree_requires_one(p, level=1, branches='   ', visited=set(), visited_branch=set()):
+def tree_requires_one(p, level=1, branches='   ', visited=set(), visited_branch=set(), br=False):
     if max_depth is not None:
         if level > max_depth:
             return
@@ -215,7 +237,7 @@ def tree_requires_one(p, level=1, branches='   ', visited=set(), visited_branch=
     visited.add(p)
     visited_branch.add(p)
 
-    deps = get_dependencies(p)
+    deps = get_dependencies(p, br)
     for i, d in enumerate(deps):
         last = i+1 == len(deps)
 
@@ -231,7 +253,7 @@ def tree_requires_one(p, level=1, branches='   ', visited=set(), visited_branch=
             #
             tree_requires_print('%s...' % d, branches, last, 'green')
         else:
-            tree_requires_print(d, branches, last)
+            tree_requires_print(d, branches, last, 'yellow' if br else None)
             branches += '│  ' if not last else '   '
             tree_requires_one(d, level+1, branches, visited)
             branches = branches[:-3]
@@ -246,7 +268,7 @@ def do_tree(args):
 
     for p in args.packages:
         print("%s" % p)
-        tree_requires_one(p)
+        tree_requires_one(p, br=args.build_requires)
 
 #
 #
@@ -271,6 +293,7 @@ if __name__ == "__main__":
         sp.add_argument('--urpmi-db', action="store_true", help='use urpmi database instead of rpm (local) one')
         sp.add_argument('--all', action="store_true", help='include packages suppressed by default (glibc...)')
         sp.add_argument('--reverse', action="store_true", help='show reverse dependencies')
+        sp.add_argument('--build-requires', action="store_true", help='show build dependencies')
         sp.add_argument('--max-depth', type=int, help='limit the number of levels of dependencies')
         sp.add_argument('--ignore', nargs='+', help='list of packages to ignore', metavar='package')
         sp.add_argument('packages', nargs='+', help='list of the packages to start the analyze from')
@@ -281,14 +304,33 @@ if __name__ == "__main__":
     reverse = args.reverse
     max_depth = args.max_depth
 
-    if not rpm_db and verbose:
-        say("If one of the following medias contains source packages, then")
-        say("the generated graph will contain build dependencies too.")
-        say("")
-        say("List of active medias:")
-        say("----------------------")
-        check_call(urpmq + ['--list-media', 'active'], stdout=sys.stderr.buffer)
-        say("----------------------")
+    #
+    # Deal with build requires and its special use cases.
+    #
+    if not rpm_db:
+        # Figure out if a source package is enabled.
+        source_media_enabled = not call(urpmq + ['--src', 'rpm'], stdout=DEVNULL, stderr=DEVNULL)
+
+        if not source_media_enabled and args.build_requires:
+            die("You must activate one or more source medias in order to use --build-requires.")
+
+        #
+        # 'urpmq --whatrequires' returns both source packages and
+        # binary ones when a source media is activated and *without*
+        # any distinction. The result is not usable, so we simply
+        # forbid any uses of source medias with --reverse option.
+        #
+        if source_media_enabled and reverse:
+            pr_err('One or more source medias are currently activated and you passed --reverse option.')
+            pr_err('This is not possible due to limitations of urpmq which doesnt make any distinction')
+            pr_err('between binary and source packages in this case.')
+            if args.build_requires:
+                die('Therefore --reverse is not allowed with --build-requires.')
+            die('Therefore you must disable the source media in /etc/urpmi/urpmi.cfg with --reverse.')
+
+    else:
+        if args.build_requires:
+            die('--build-requires is only allowed with --urpmi-db.')
 
     #
     # Check the validity of packages names given by the user.

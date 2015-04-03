@@ -36,8 +36,6 @@ def bug(msg):
     exit(1)
 
 
-aliases = {}
-
 rpm   = ['rpm', '-q', '--qf', '%{NAME}\n']
 urpmq = ['urpmq']
 
@@ -48,6 +46,23 @@ def check_text_output(*args, **kwargs):
     kwargs['universal_newlines'] = True
     return check_output(*args, **kwargs)
 
+
+class Dependency(object):
+
+    def __init__(self, name):
+        self.name = name
+        self._provider = None
+
+    @property
+    def provider(self):
+        return self._provider
+
+    @provider.setter
+    def provider(self, p):
+        # urpmq(1) can report multiple providers separated with
+        # '|'. OTOH rpm(1) doesn't allow '|' in package name, so it's
+        # safe to do the split unconditionally.
+        self._provider = p.strip().split('|')[0]
 
 #
 # Special case using rpm(1) to find out reverse dependencies: rpm(1)
@@ -77,6 +92,10 @@ def _get_local_rdependencies(pkg):
 
     return rdeps
 
+
+# A cache to store some information about a package
+# dependency/require.
+dependencies = {}
 
 def _get_dependencies(pkg, br=False):
     #
@@ -138,12 +157,18 @@ def _get_dependencies(pkg, br=False):
         # fancier names. So sanitize them by converting the fancy name
         # into a package one.
         #
-        if d not in aliases:
-            x = check_text_output(cmd + ['--whatprovides', d])
-            x = x.rstrip()
-            aliases[d] = x.split(None if cmd == rpm else '|')[0]
-
-        deps.add(aliases[d])
+        dep = dependencies.get(d)
+        if not dep:
+            dep = Dependency(d)
+            try:
+                dep.provider = check_text_output(cmd + ['--whatprovides', d], stderr=DEVNULL)
+            except CalledProcessError:
+                # If for some reasons, no package provides this dep,
+                # we still register the dep but no provider will be
+                # set so we could detect the error later.
+                pass
+            dependencies[d] = dep
+        deps.add(dep)
 
     return deps
 
@@ -154,15 +179,25 @@ def get_dependencies(pkg, br=False):
     else:
         deps = _get_dependencies(pkg, br)
 
-    # Filter out packages the user is not interested in.
+    providers = set()
     for d in deps.copy():
-        if d == pkg:
+        dep = d.provider if d.provider else d.name
+
+        # For now, we report canonical dep names only, so remove
+        # duplicates.
+        if dep in providers:
             deps.remove(d)
-        elif d in packages_ignored:
+            continue
+        providers.add(dep)
+
+        # Filter out packages the user is not interested in.
+        if dep == pkg:
+            deps.remove(d)
+        elif dep in packages_ignored:
             deps.remove(d)
         else:
             for pattern in packages_ignored_patterns:
-                if fnmatch.fnmatchcase(d, pattern):
+                if fnmatch.fnmatchcase(dep, pattern):
                     deps.remove(d)
                     break
     return deps
@@ -171,13 +206,20 @@ def get_dependencies(pkg, br=False):
 # 'dot' subcommand.
 #
 def dot_print_dependency(d, p, reverse, br):
-    attributes = []
-    if br:
-        attributes.append('color=darkgoldenrod')
-    if reverse:
-        d, p = p, d
+    node_attributes = []
+    dep = d.provider if d.provider else d.name
 
-    print('  "%s" -> "%s" [%s];' % (p, d, ','.join(attributes)))
+    if not d.provider:
+        node_attributes.append('color=red,style=filled')
+    if node_attributes:
+        print('  "%s" [%s];' % (dep, ','.join(node_attributes)))
+
+    edge_attributes = []
+    if br:
+        edge_attributes.append('color=darkgoldenrod')
+
+    d, p = (p, dep) if reverse else (dep, p)
+    print('  "%s" -> "%s" [%s];' % (p, d, ','.join(edge_attributes)))
 
 
 def dot_requires_one(p, visited=set(), level=1, br=False):
@@ -191,7 +233,8 @@ def dot_requires_one(p, visited=set(), level=1, br=False):
         for d in deps:
             dot_print_dependency(d, p, reverse, br)
         for d in deps:
-            dot_requires_one(d, visited, level+1)
+            if d.provider:
+                dot_requires_one(d.provider, visited, level+1)
 
 
 def dot_requires(packages, br=False, expand=False, concentrate=False):
@@ -212,20 +255,38 @@ def do_dot(args):
 # 'tree' subcommand.
 #
 ansi_color_escape_map = {
+    'off'       : "\x1B[0m",
+    'bold'      : "\x1B[1m",
+    'blink'     : "\x1B[5m",
     'red'       : "\x1B[31m",
     'yellow'    : "\x1B[33m",
     'green'     : "\x1B[32m",
-    'off'       : "\x1B[0m",
 }
 
-
-def tree_requires_print(p, branches, last, color=None):
+def tree_requires_print(dep, branches, last, seen=False, cyclic=False, br=False):
     print('%s%s ' % (branches, '└─' if last else '├─'), end='')
-    if color and (sys.stdout.isatty() or force_color):
-        print('%s%s%s' % (ansi_color_escape_map[color], p, ansi_color_escape_map['off']))
-    else:
-        print(p)
 
+    p = dep.provider
+    if not sys.stdout.isatty() and not force_color:
+        print(p if p else '**' + dep.name + '**')
+        return
+
+    if not p:
+        print(ansi_color_escape_map['blink'], end='')
+        print(ansi_color_escape_map['bold'],  end='')
+        print(ansi_color_escape_map['red'],   end='')
+        p = dep.name
+    elif cyclic:
+        print(ansi_color_escape_map['red'],  end='')
+        p += '...'
+    elif seen:
+        print(ansi_color_escape_map['green'],  end='')
+        p += '...'
+    elif br:
+        print(ansi_color_escape_map['yellow'],  end='')
+
+    print('%s' % p, end='')
+    print('%s' % ansi_color_escape_map['off'])
 
 # Mutable default arguments are intendend here: we want to show only
 # once a package and its deps even when several roots are used.
@@ -238,24 +299,27 @@ def tree_requires_one(p, level=1, branches='   ', visited=set(), visited_branch=
     visited_branch.add(p)
 
     deps = get_dependencies(p, br)
-    for i, d in enumerate(deps):
-        last = i+1 == len(deps)
+    for i, d in enumerate(deps, 1):
+        provider = d.provider
+        last = i == len(deps)
 
-        if d in visited_branch:
+        if not provider:
+            tree_requires_print(d, branches, last)
+        elif provider in visited_branch:
             #
             # Highlight cyclic dependency.
             #
-            tree_requires_print('%s...' % d, branches, last, 'red')
-        elif d in visited:
+            tree_requires_print(d, branches, last, cyclic=True)
+        elif provider in visited:
             #
             # Don't recurse into the same package if it's already
             # been visited by another branch.
             #
-            tree_requires_print('%s...' % d, branches, last, 'green')
+            tree_requires_print(d, branches, last, seen=True)
         else:
-            tree_requires_print(d, branches, last, 'yellow' if br else None)
+            tree_requires_print(d, branches, last, br=br)
             branches += '│  ' if not last else '   '
-            tree_requires_one(d, level+1, branches, visited)
+            tree_requires_one(provider, level+1, branches, visited)
             branches = branches[:-3]
 
     visited_branch.remove(p)

@@ -263,6 +263,14 @@ ansi_color_escape_map = {
     'green'     : "\x1B[32m",
 }
 
+
+def print_color(msg, colors):
+    for c in colors:
+        print(ansi_color_escape_map[c], end='')
+    print(msg, end='')
+    print(ansi_color_escape_map['off'])
+
+
 def tree_requires_print(dep, branches, last, seen=False, cyclic=False, br=False):
     print('%s%s ' % (branches, '└─' if last else '├─'), end='')
 
@@ -271,22 +279,21 @@ def tree_requires_print(dep, branches, last, seen=False, cyclic=False, br=False)
         print(p if p else '**' + dep.name + '**')
         return
 
+    colors = ()
     if not p:
-        print(ansi_color_escape_map['blink'], end='')
-        print(ansi_color_escape_map['bold'],  end='')
-        print(ansi_color_escape_map['red'],   end='')
+        colors = ('blink', 'bold', 'red')
         p = dep.name
     elif cyclic:
-        print(ansi_color_escape_map['red'],  end='')
+        colors = ('red',)
         p += '...'
     elif seen:
-        print(ansi_color_escape_map['green'],  end='')
+        colors = ('green',)
         p += '...'
     elif br:
-        print(ansi_color_escape_map['yellow'],  end='')
+        colors = ('yellow',)
 
-    print('%s' % p, end='')
-    print('%s' % ansi_color_escape_map['off'])
+    print_color('%s' % p, colors)
+
 
 # Mutable default arguments are intendend here: we want to show only
 # once a package and its deps even when several roots are used.
